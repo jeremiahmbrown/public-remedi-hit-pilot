@@ -1,0 +1,1078 @@
+---
+title: "REMEDI HIT Pilot Manuscript Analyses"
+author: "Jeremiah Brown"
+format: html
+code-fold: true
+editor: visual
+execute: 
+  warning: false
+---
+
+Load packages and custom functions
+
+```{r}
+#| label: load-packages
+#| echo: false
+library(tidyverse)
+library(qualtRics)
+library(lubridate)
+library(gtsummary)
+library(discAUC)
+library(labelVector)
+library(report)
+library(ggsci)
+library(ggpubr)
+library(gt)
+library(effectsize)
+library(performance)
+
+#I copied this function mostly from sean gilroy's discountingtool's package. # https://github.com/miyamot0/discountingtools
+
+jb_rules <- function(dat, idCol = "id", ll = 1000) {
+  
+  if (!idCol %in% colnames(dat)) {
+    stop("Id column not found, please check naming")
+  } else {
+    colnames(dat)[colnames(dat) == idCol] <- 'id'
+  }
+  
+  lengthReturn <- length(unique(dat$id))
+  
+  returnFrame <- data.frame(id = rep(NA, lengthReturn),
+                            C1 = rep(NA, lengthReturn),
+                            C2 = rep(NA, lengthReturn))
+  
+  mIndex <- 1
+  
+  for (i in unique(dat$id)) {
+    # print(i) # added this line to show what id might violate assumptions of function
+    subsetData <- dat[dat$id == i,]
+    
+    criteriaOne <- TRUE
+    criteriaTwo <- TRUE
+    
+    subsetData <- subsetData[order(subsetData$delay), ]
+    
+    for (j in 2:length(subsetData$delay)) {
+      prev = subsetData[j-1, ]$ip
+      curr = subsetData[j, ]$ip
+      
+      if ((curr - prev) > (.2 * ll)) {
+        criteriaOne = FALSE
+      }
+    }
+    
+    prev <- subsetData[1, ]$ip
+    curr <- subsetData[length(subsetData$delay), ]$ip
+    
+    if ((prev - curr) < (.1 * ll)) {
+      criteriaTwo = FALSE
+    }
+    
+    returnFrame[mIndex, ]$id <- i
+    returnFrame[mIndex, ]$C1 <- criteriaOne
+    returnFrame[mIndex, ]$C2 <- criteriaTwo
+    
+    mIndex <- mIndex + 1
+    
+  }
+  
+  returnFrame
+}
+
+
+```
+
+Load, shape, clean data from qualtrics or CSV
+
+```{r}
+#| label: load-data
+#| output: FALSE
+
+rawdata <- read_csv("data/deidentified-rawdata.csv")
+
+#add a column to calculate the number of indicated medical diagnoses on each diagnosis question
+#we add it to the rawdata df because we need these numbers for all responses in order to 
+#create the flow diagram.
+
+rawdata <- rawdata %>% 
+  select(ResponseId, diagnoses1_10:diagnoses1_12) %>%  
+  mutate(diagnoses1_total = rowSums(!is.na(.)) - 1) |> 
+  select(ResponseId, diagnoses1_total) |> 
+  left_join(rawdata, by = "ResponseId")
+
+rawdata <- rawdata %>% 
+  select(ResponseId, diagnoses2_10:diagnoses2_12) %>%  
+  mutate(diagnoses2_total = rowSums(!is.na(.)) - 1) |> 
+  select(ResponseId, diagnoses2_total) |> 
+  left_join(rawdata, by = "ResponseId")
+
+#pull only the finishers for our study
+data <- rawdata %>% 
+  filter(mTurkCode != 'NA' & Status == "IP Address" & group != 'NA' & IPAddress != 'NA' &
+           StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') %>% 
+  mutate(mTurkCode = as.factor(mTurkCode), id = row_number(),
+         id = as.factor(id), group = as.factor(group)) %>% 
+  select(id, Progress, IPAddress, mTurk_ID, mTurkCode, diagnoses1_score, diagnoses2_score, BMI, 
+         age = Q3988, edu = Q3982, gender = Q3987, income = Q3984, cont_ladder, hba1c = Q206,
+         group:ncc_ac) %>% 
+  mutate(age = as.numeric(age)) %>%
+  rename(eft_cue1month = eft_cue1month...822,
+         eft_cue3month = eft_cue3month...823,
+         eft_cue6month = eft_cue6month...824,
+         eft_cue1year = eft_cue1year...825,
+         eft_cue3year = eft_cue3year...826,
+         eft_cue5year = eft_cue5year...827,
+         eft_cue10year = eft_cue10year...828,
+         hit_cue1 = hit_cue1...829,
+         hit_cue2 = hit_cue2...830,
+         hit_cue3 = hit_cue3...831,
+         hit_cue4 = hit_cue4...832,
+         hit_cue5 = hit_cue5...833,
+         hit_cue6 = hit_cue6...834,
+         hit_cue7 = hit_cue7...835)
+
+#recode income as an ordered factor
+
+data$income <- factor(data$income, levels = c("$0 to $9,999",
+                                              "$10,000 to $19,999",
+                                              "$20,000 to $29,999",
+                                              "$30,000 to $39,999",
+                                              "$40,000 to $49,999",
+                                              "$50,000 to $59,999",
+                                              "$60,000 to $69,999",
+                                              "$70,000 to $79,999",
+                                              "$80,000 to $89,999",
+                                              "$90,000 to $99,999",
+                                              "$100,000 to $109,999",
+                                              "$130,000 to $139,999",
+                                              "$170,000 to $179,999",
+                                              "$180,000 to $189,999"))
+
+#recode income as a continuous variable in include in table 1
+data$income <- data |> 
+  mutate(income = as.numeric(income),
+         income = case_when(
+           income == 1 ~ 4999.5,
+           income == 2 ~ 1499.5,
+           income == 3 ~ 24999.5,
+           income == 4 ~ 34999.5, 
+           income == 5 ~ 49999.5, 
+           income == 6 ~ 54999.5,
+           income == 7 ~ 64999.5,
+           income == 8 ~ 74999.5,
+           income == 9 ~ 84999.5,
+           income == 10 ~ 94999.5,
+           income == 11 ~ 104999.5,
+           income == 12 ~ 134999.5,
+           income == 13 ~ 174999.5, 
+           income == 14 ~ 184999.5
+         )) |> 
+  pull(income)
+
+data$group <- recode_factor(data$group, "HHT" = "HIT")
+
+#recode hba1c values to decrease number of categories
+data$hba1c <- data |> 
+  mutate(hba1c = case_when(
+    hba1c == "6.4% or lower" ~ "6.9% or lower",
+    hba1c == "6.5% - 6.9%" ~ "6.9% or lower",
+    hba1c == "7.0% - 7.4%" ~ "7.0% - 8.0%",
+    hba1c == "7.5% - 7.9%" ~ "7.0% - 8.0%",
+    hba1c == "8.0% - 8.4%" ~ "8.0% - 8.9%",
+    hba1c == "8.5% - 8.9%" ~ "8.0% - 8.9%",
+    hba1c == "9% or greater" ~ "9.0% or greater",
+    hba1c == "I don't know my most recent HbA1c reading" ~ "Unkown by participant"
+  )) |> 
+  pull(hba1c)
+
+
+data <- 
+  set_label(data,
+            age = "Age",
+            income = "Income",
+            gender = "Gender",
+            cont_ladder = "Contemplation Ladder",
+            edu = "Education",
+            hba1c = "HbA1c")
+
+```
+
+Calculate Ordinal AUC, ANOVAs and posthoc tests for differences in AUC between groups
+
+```{r}
+#| label: ordinal_auc
+#create wide dataframe with indiff points
+wide_dd <- rbind(data %>%
+                   filter(group == "EFT") %>%
+                   select(id, group, mTurkCode, ac = eft_ac,
+                          eft_ip_30_1000:eft_ip_3650_1000) %>% 
+                   rename("30" = eft_ip_30_1000, "90" = eft_ip_90_1000, "180" = eft_ip_180_1000,
+                          "365" = eft_ip_365_1000, "1095" = eft_ip_1095_1000, "1825" = eft_ip_1825_1000,
+                          "3650" = eft_ip_3650_1000), data %>% # start of HIT tibble
+                   filter(group == "HIT") %>%
+                   select(id, group, mTurkCode, ac = hit_ac, hit_ip_30_1000:hit_ip_3650_1000) %>% 
+                   rename("30" = hit_ip_30_1000, "90" = hit_ip_90_1000, "180" = hit_ip_180_1000,
+                          "365" = hit_ip_365_1000, "1095" = hit_ip_1095_1000, "1825" = hit_ip_1825_1000,
+                          "3650" =hit_ip_3650_1000), data %>% # start of ncc tibble
+                   filter(group == "NCC") %>%
+                   select(id, group, mTurkCode, ac = ncc_ac, ncc_ip_30_1000:ncc_ip_3650_1000) %>% 
+                   rename("30" = ncc_ip_30_1000, "90" = ncc_ip_90_1000, "180" = ncc_ip_180_1000,
+                          "365" = ncc_ip_365_1000, "1095" = ncc_ip_1095_1000, "1825" = ncc_ip_1825_1000,
+                          "3650" = ncc_ip_3650_1000)) %>% 
+  mutate(ac = as.numeric(ac))
+
+#create long df of IPs
+long_dd <- wide_dd %>% 
+  pivot_longer(-id:-ac, names_to = "x", values_to = "y") %>% 
+  mutate(x = as.numeric(x))
+
+#we must name the three columns id, delay, and ip for this function to work
+#create list of ids passing jb rules
+#dropping rule 2 given the EFT intervention
+passing_ids <- long_dd %>% 
+  select(-group:-ac) %>% 
+  mutate("x" = as.numeric(x)) %>% 
+  rename("delay" = "x", "ip" = "y") %>% 
+  jb_rules(.) %>% 
+  filter(C1) %>% 
+  dplyr::pull(id)
+
+#create list of passing ids based on DD attention checks
+passing_ids_ac <- wide_dd %>% 
+  mutate("id" = as.character(id)) %>% 
+  filter(ac >= .75) %>% 
+  pull(id)
+
+#Ordinal AUC calculations including all participants who finished
+
+auc_ord_all <- long_dd %>% 
+  prep_ordinal_all(., x_axis = "x") %>% 
+  mutate(prop_y = y/1000) %>% 
+  AUC(.,
+      indiff = "prop_y",
+      x_axis = "x_ord",
+      max_x_axis = 7,
+      amount = 1,
+      groupings = c("id", "group"),
+      type = "ordinal",
+      prob_disc = FALSE,
+  )
+
+#Ordinal AUC calculations including only those who passed 3 of 4 DD attention checks
+auc_ord_pass_ac <- auc_ord_all |> 
+  filter(id %in% passing_ids_ac)
+
+#quick look at mean/sd for both passing and failing
+auc_ord_all %>% 
+  group_by(group) %>% 
+  summarize(mean_auc = mean(AUC), md_auc = median(AUC),
+            sd_auc = sd(AUC), iqr_auc = IQR(AUC), n = n())
+
+auc_ord_pass_ac %>% 
+  group_by(group) %>% 
+  summarize(mean_auc = mean(AUC), md_auc = median(AUC),
+            sd_auc = sd(AUC), iqr_auc = IQR(AUC), n_auc = n())
+
+# one way anova to test if values of ordinal AUC are the same in each group
+#including only passing attention checks
+
+pass_auc_model <- aov(AUC ~ group, auc_ord_pass_ac)
+summary(pass_auc_model)
+check_model(pass_auc_model)
+report(pass_auc_model)
+
+tukey_pass <- TukeyHSD((pass_auc_model))
+
+#calculate effect sizes for Tukey HSD comparisons, passing ACs
+
+#EFT vs. HIT cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_pass_ac |> 
+  filter(group == "EFT") |> 
+  pull(AUC), 
+  y = auc_ord_pass_ac |> 
+    filter(group == "HIT") |> 
+    pull(AUC))
+
+#EFT vs. NCC cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_pass_ac |> 
+  filter(group == "EFT") |> 
+  pull(AUC), 
+  y = auc_ord_pass_ac |> 
+    filter(group == "NCC") |> 
+    pull(AUC))
+
+#HIT vs. NCC cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_pass_ac |> 
+  filter(group == "NCC") |> 
+  pull(AUC), 
+  y = auc_ord_pass_ac |> 
+    filter(group == "HIT") |> 
+    pull(AUC))
+
+
+# sensitivity analyses
+# repeat ANOVA, posthoc, and posthoc effect size calculations for all finishers
+all_auc_model <- aov(AUC ~ group, auc_ord_all)
+summary(all_auc_model)
+check_model(all_auc_model)
+report(all_auc_model)
+
+tukey_all <- TukeyHSD(all_auc_model, conf.level = .95)
+
+#calculate effect sizes for Tukey HSD comparisons, including all finishers
+
+#EFT vs. HIT cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_all |> 
+  filter(group == "EFT") |> 
+  pull(AUC), 
+  y = auc_ord_all |> 
+    filter(group == "HIT") |> 
+    pull(AUC))
+
+#EFT vs. NCC cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_all |> 
+  filter(group == "EFT") |> 
+  pull(AUC), 
+  y = auc_ord_all |> 
+    filter(group == "NCC") |> 
+    pull(AUC))
+
+#HIT vs. NCC cohen's D for mean difference
+effectsize::cohens_d(
+  x = auc_ord_all |> 
+  filter(group == "NCC") |> 
+  pull(AUC), 
+  y = auc_ord_all |> 
+    filter(group == "HIT") |> 
+    pull(AUC))
+
+```
+
+Demographics Table (Table 1)
+
+```{r}
+#| label: table_one
+
+#create table one
+# include all participants who finished regardless of dd attention checks
+
+tableone <- data %>% 
+  select(group, age, BMI, income, cont_ladder, hba1c, gender) %>% 
+  tbl_summary(
+    by = group,
+    statistic = list(all_continuous() ~ "{median} ({p25}, {p75})",
+                     all_categorical() ~ "{n} / {N} ({p}%)"),
+    digits = all_continuous() ~ 2,
+  ) %>% 
+  add_overall() %>% 
+  add_p(include = c("age", "BMI", "income", "cont_ladder", "gender", "hba1c")) |> 
+  bold_labels() |>  
+  modify_header(label = "**Variable**") %>% 
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Group**")
+
+#save table
+# tableone |>  
+#   as_gt() |> 
+#   gt::gtsave(filename = "plots/tableone.pdf")
+
+
+```
+
+Discounting curve by group
+
+```{r}
+#| label: discounting_curve
+
+# create df for plot: folks who passed AC, and their x/y values
+plotdata <- wide_dd %>%
+  select(-mTurkCode) %>% 
+  pivot_longer(cols = `30`:`3650`, names_to = "x", values_to = "y") %>% 
+  filter(id %in% passing_ids_ac) %>% 
+  mutate(x = as.numeric(x))
+
+#create plotdata for ordinal delays, passed AC
+plotdata_ord <- long_dd %>% 
+  filter(id %in% passing_ids_ac) %>% 
+  prep_ordinal_all(., x_axis = "x")
+
+#create df for mean, sd, and se of the plot, passed AC
+plotdata_sum <- Rmisc::summarySE(data = plotdata, measurevar = "y", groupvars = c("group", "x")) %>% 
+  rename(mn = y)
+
+plotdataord_sum <- plotdata_sum %>% 
+  as_tibble() %>% 
+  prep_ordinal_all(., x_axis = "x")
+
+#create plot using ordinal x axis
+pd_ord <- position_dodge(.1)
+
+n_total <- data |> 
+  nrow()
+
+n_total_pass_ac <- data |> 
+  filter(id %in% passing_ids_ac) |> 
+  nrow()
+
+indiffplot_ord <- plotdata_ord %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn, color = group), size = 2, data = plotdataord_sum, position = pd_ord) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum, width = .15, size = .5, position = pd_ord) +
+    # geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum, size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points by Group",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("N = {n_total_pass_ac}")) +
+    beezdemand::theme_apa() +
+    theme(legend.key.size = unit(1.5, "cm"),
+          legend.background = element_rect(color = "black",
+                                           fill = scales::alpha("white", .1),
+                                           linetype = "solid"),
+          legend.key = element_rect(fill ="white"),
+          legend.position = c(.8, 1),
+          legend.direction = "horizontal",
+          legend.title = element_text(face = "bold")) +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30 days", "90 days", "180 days", "365 days", "1095 days", "1825 days", "3650 days")) + # trans = 'log10')  +
+    ggsci::scale_color_jama(name = "Group")
+
+# ggsave("plots/group-ordinal-discounting-curves-fulldata.png", device = "png", dpi = 1000, width = 8, height = 5)
+
+#create discounting curves for each group
+#colors to match the main plot
+colors <- bind_cols(pal_jama("default")(3), c("HIT", "EFT", "NCC")) |> 
+  rename(color = ...1,
+         group = ...2)
+
+color_eft <- colors |> 
+  filter(group == "EFT") |> 
+  pull(color)
+
+color_hit <- colors |> 
+  filter(group == "HIT") |> 
+  pull(color)
+
+color_ncc <- colors |> 
+  filter(group == "NCC") |> 
+  pull(color)
+
+#count group sizes, and sizes after passing DD attention checks
+n_eft <- data |> 
+  filter(group == "EFT") |> 
+  nrow()
+
+n_eft_pass_ac <- data |> 
+  filter(group == "EFT" & id %in% passing_ids_ac) |> 
+  nrow()
+
+n_hit <- data |> 
+  filter(group == "HIT") |> 
+  nrow()
+
+n_hit_pass_ac <- data |> 
+  filter(group == "HIT" & id %in% passing_ids_ac) |> 
+  nrow()
+
+n_ncc <- data |> 
+  filter(group == "NCC") |> 
+  nrow()
+
+n_ncc_pass_ac <- data |> 
+  filter(group == "NCC" & id %in% passing_ids_ac) |> 
+  nrow()
+
+#EFT, passing AC
+indiffplot_ord_eft <- plotdata_ord %>%
+  filter(group == "EFT") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum %>%
+                 filter(group == "EFT"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum %>%
+                    filter(group == "EFT"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum %>%
+                filter(group == "EFT"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - EFT",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+         subtitle = str_glue("n = {n_eft_pass_ac}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("EFT" = color_eft), name = "Group")
+
+# HIT, passing AC
+indiffplot_ord_hit <- plotdata_ord %>%
+  filter(group == "HIT") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum %>%
+                 filter(group == "HIT"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum %>%
+                    filter(group == "HIT"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum %>%
+                filter(group == "HIT"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - HIT",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("n = {n_hit_pass_ac}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("HIT" = color_hit), name = "Group")
+
+# NCC, passing AC
+indiffplot_ord_ncc <- plotdata_ord %>%
+  filter(group == "NCC") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum %>%
+                 filter(group == "NCC"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum %>%
+                    filter(group == "NCC"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum %>%
+                filter(group == "NCC"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - NCC",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("n = {n_ncc_pass_ac}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("NCC" = color_ncc), name = "Group")
+
+#combine plots for a cool figure
+
+ggarrange(
+  indiffplot_ord,
+  ggarrange(indiffplot_ord_hit, indiffplot_ord_eft, indiffplot_ord_ncc, 
+            ncol = 3, labels = c("B", "C", "D")),
+  nrow = 3, labels = "A"
+)
+
+# ggsave("plots/group-ordinal-discounting-curves-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15)
+
+### supplementary materials; recreate plots using all data
+#create plotdata for ordinal delays, all finishers
+plotdata_ord_all <- long_dd %>% 
+  prep_ordinal_all(., x_axis = "x")
+
+#recreate df for mean, sd, and se of the plot, all finishers
+plotdata_sum_all <- Rmisc::summarySE(data = plotdata_ord_all, measurevar = "y", groupvars = c("group", "x")) %>% 
+  rename(mn = y)
+
+plotdataord_sum_all <- plotdata_sum_all %>% 
+  as_tibble() %>% 
+  prep_ordinal_all(., x_axis = "x")
+
+#create discounting curve for all finishers
+indiffplot_ord_all <- plotdata_ord_all %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn, color = group), size = 2, data = plotdataord_sum_all, position = pd_ord) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum_all, width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum_all, size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points by Group",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("N = {n_total}")) +
+    beezdemand::theme_apa() +
+    theme(legend.key.size = unit(1.5, "cm"),
+          legend.background = element_rect(color = "black",
+                                           fill = scales::alpha("white", .1),
+                                           linetype = "solid"),
+          legend.key = element_rect(fill ="white"),
+          legend.position = c(.8, 1),
+          legend.direction = "horizontal",
+          legend.title = element_text(face = "bold")) +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30 days", "90 days", "180 days", "365 days", "1095 days", "1825 days", "3650 days")) + 
+    ggsci::scale_color_jama(name = "Group")
+
+#EFT, all finishers
+indiffplot_ord_eft_all <- plotdata_ord_all %>%
+  filter(group == "EFT") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum_all %>%
+                 filter(group == "EFT"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum_all %>%
+                    filter(group == "EFT"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum_all %>%
+                filter(group == "EFT"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - EFT",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+         subtitle = str_glue("n = {n_eft}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("EFT" = color_eft), name = "Group")
+
+# HIT, all finishers
+indiffplot_ord_hit_all <- plotdata_ord_all %>%
+  filter(group == "HIT") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum_all %>%
+                 filter(group == "HIT"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum_all %>%
+                    filter(group == "HIT"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum_all %>%
+                filter(group == "HIT"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - HIT",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("n = {n_hit}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("HIT" = color_hit), name = "Group")
+
+# NCC, all finishers
+indiffplot_ord_ncc_all <- plotdata_ord_all %>%
+  filter(group == "NCC") %>%
+    ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
+    geom_point(aes(x = x_ord, y = mn), data = plotdataord_sum_all %>%
+                 filter(group == "NCC"), position = pd_ord, size = 2) +
+    geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
+                  data = plotdataord_sum_all %>%
+                    filter(group == "NCC"), width = .15, size = .5, position = pd_ord) +
+    geom_line(aes(color = group, group = interaction(id, group)), alpha = .1, position = pd_ord) +
+    geom_line(aes(x = x_ord, y = mn, color = group), data = plotdataord_sum_all %>%
+                filter(group == "NCC"), size = 1, position = pd_ord) +
+    labs(title = "Average Indifference Points - NCC",
+         x = "Delay (ordinal)", y = "Indifference Point ($)",
+                  subtitle = str_glue("n = {n_ncc}")) +
+    beezdemand::theme_apa() +
+    theme(legend.position = "none") +
+    scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
+    labels = c("30", "90", "180", "365", "1095", "1825", "3650")) +
+    scale_color_manual(values = c("NCC" = color_ncc), name = "Group")
+
+#combine plots for a cool figure
+
+ggarrange(
+  indiffplot_ord_all,
+  ggarrange(indiffplot_ord_hit_all, indiffplot_ord_eft_all, indiffplot_ord_ncc_all, 
+            ncol = 3, labels = c("B", "C", "D")),
+  nrow = 3, labels = "A")
+
+# ggsave("plots/supplement-group-ordinal-discounting-curves-all-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15)
+
+```
+
+Boxplot of Ordinal AUC values
+
+```{r}
+#| label: auc_boxplot
+
+sample <- auc_ord_pass_ac |> 
+  group_by(group) |> 
+  summarise(n = n())
+
+auc_ord_pass_ac |> 
+  left_join(sample) |> 
+  mutate(x_axis = paste0(group, "\n", "n = ", n)) |> 
+  ggplot(aes(x = x_axis, y = AUC)) + 
+  geom_boxplot(aes(color = group), notch = TRUE) +
+  geom_jitter(aes(color = group), alpha = .5, position = position_jitterdodge(jitter.width = 1)) +
+  labs(x = "Group",
+       y = "Ordinal AUC",
+       title = "Ordinal AUC by group assignment") +
+  theme_bw() +
+      scale_color_manual(values = c("EFT" = color_eft, "HIT" = color_hit, "NCC" = color_ncc),
+                         name = "Group")
+
+
+# ggsave("plots/ordinal-auc-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7)
+
+### supplementary materials boxplot
+
+sample_all <- auc_ord_all |> 
+  group_by(group) |> 
+  summarise(n = n())
+
+auc_ord_all |> 
+  left_join(sample_all) |> 
+  mutate(x_axis = paste0(group, "\n", "n = ", n)) |> 
+  ggplot(aes(x = x_axis, y = AUC)) + 
+  geom_boxplot(aes(color = group), notch = TRUE) +
+  geom_jitter(aes(color = group), alpha = .5, position = position_jitterdodge(jitter.width = 1)) +
+  labs(x = "Group",
+       y = "Ordinal AUC",
+       title = "Ordinal AUC by group assignment") +
+  theme_bw() +
+      scale_color_manual(values = c("EFT" = color_eft, "HIT" = color_hit, "NCC" = color_ncc),
+                         name = "Group")
+
+
+# ggsave("plots/supplement-ordinal-auc-all-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7) 
+
+
+```
+
+Fisher's Exact test of randomized vs. finished participants
+
+```{r}
+#count number of participants randomized to EFT condition
+#we must remove the pilots/previews before counting on the randomization variable
+eft_all <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  select(FL_12_DO_FL_32) |> 
+  replace_na(replace = list(FL_12_DO_FL_32 = 0)) |> 
+  sum()
+
+#count number of participants randomized to EFT who finished experiment
+eft_fin <- data |> 
+  filter(group == "EFT") |> 
+  nrow()
+
+#count number of eft who voluntarily withdrew after randomization
+eft_vw <- eft_all - eft_fin
+
+#count number of participants randomized to HIT condition
+hit_all <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  select(FL_12_DO_FL_33) |> 
+  replace_na(replace = list(FL_12_DO_FL_33 = 0)) |> 
+  sum()
+
+#count number of participants randomized to HIT who finished experiment
+hit_fin <- data |> 
+  filter(group == "HIT") |> 
+  nrow()
+
+#count number of hit who voluntarily withdrew after randomization
+hit_vw <- hit_all - hit_fin
+
+#count number of participants randomized to NCC condition
+ncc_all <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  select(FL_12_DO_FL_44) |> 
+  replace_na(replace = list(FL_12_DO_FL_44 = 0)) |> 
+  sum()
+
+#count number of participants randomized to NCC who finished experiment
+ncc_fin <- data |> 
+  filter(group == "NCC") |> 
+  nrow()
+
+#count number of ncc who voluntarily withdrew after randomization
+ncc_vw <- ncc_all - ncc_fin
+
+n_randomized <- eft_all + hit_all + ncc_all
+
+fisher_df <- tibble(eft = c(eft_vw, eft_fin),
+                    hit = c(hit_vw, hit_fin),
+                    ncc = c(ncc_vw, ncc_fin))
+
+fisher.test(fisher_df)
+```
+
+Flow diagram numbers
+
+```{r}
+#| label: consort_diagram_numbers
+
+#Screened for eligibility. Date field to not include pilot participants,
+# mturk_id field to not include testing, status to prevent survey previews.
+n_screened <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  nrow()
+
+#excluded for any reason; total excluded
+#simply subtract the included number from the total screened number
+#the included number is the number of folks who were shown the consent waiver blocks
+#we can't just use those who answered yes to this question, because some were shown but didn't
+#get around to selecting yes and starting the study
+
+n_excluded <- (rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  nrow()) - (rawdata |>  
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test' &
+           IP_country == "United States" & IP_block != 1) |> 
+    filter(BMI >= 30 & diagnoses1_score == diagnoses2_score & !is.na(diagnoses1_5) & !is.na(diagnoses2_5) & is.na(diagnoses1_1) & is.na(diagnoses1_7) & is.na(diagnoses1_10) & is.na(diagnoses1_11) & is.na(diagnoses1_12) & is.na(diagnoses2_1) & is.na(diagnoses2_7) & is.na(diagnoses2_10) & is.na(diagnoses2_11) & is.na(diagnoses2_12) & diagnoses1_total <= 4 & diagnoses2_total <= 4) |> 
+  nrow())
+
+
+#attempted to screen, but was found using an IP address associated with a VPN/VPS 
+n_ip_block_excluded <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(IP_block == 1) |> 
+  nrow()
+
+#create vectors of qualtrics response IDs to use for filtering in later calculations
+ip_block_ids <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(IP_block == 1) |> 
+  pull(ResponseId)
+
+# attempted to screen, but ip from a country other than the US AND country is not empty (i.e., NA)
+# filter out all responses that have already been excluded 
+n_ip_country_excluded <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |>
+  filter(!ResponseId %in% ip_block_ids) |> 
+  filter(IP_country != "United States" & !is.na(IP_country)) |> 
+  nrow()
+
+#create vector of response ids associated with bad countries
+#must continue to filter our all responses that have already been excluded
+ip_country_ids <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |>
+  filter(!ResponseId %in% ip_block_ids) |> 
+  filter(IP_country != "United States" & !is.na(IP_country)) |> 
+  pull(ResponseId)
+         
+         
+#number of duplicate IP addresses, preventing folks from continuing past the authentication block
+#we must remove pilots/previews, and keep those who passed the IP address screens via IPHub
+n_duplicates <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(!ResponseId %in% ip_block_ids) |> 
+  filter(!ResponseId %in% ip_country_ids) |> 
+  select(Access) |>
+  duplicated() |> 
+  sum()
+
+#create vector of distinct IP addresses to keep in later calculations
+distinct_ips <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(!ResponseId %in% ip_block_ids) |> 
+  filter(!ResponseId %in% ip_country_ids) |>
+  select(ResponseId, Access) |> 
+  distinct(Access, .keep_all = TRUE) |> 
+  pull(ResponseId)
+
+
+# screened, excluding all previously dropped participants, but excluded for BMI, is not reporting type 2 diabetes in both questions,
+# is not reporting the same diseases in both questions, is reporting colorectal cancer,
+# is reporting breast cancer, is reporting copd, is reporting type 1 diabetes, is reporting
+# none of the illnesses in this list
+
+#diagnoses1_5 = t2dm, diagnoses1_1 = crc, diagnoses1_7 = breast cancer, diagnoses1_10 = copd,
+#diagnoses1_11 = t1dm, diagnoses1_12 = none of the illnesses
+
+#!is.na = they selected this. is.na = they did not select this. 
+
+n_bmi_diag_excluded <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(!ResponseId %in% ip_block_ids) |> 
+  filter(!ResponseId %in% ip_country_ids) |> 
+  filter(ResponseId %in% distinct_ips) |> 
+  select(Access, BMI, diagnoses1_10:diagnoses1_12, diagnoses2_10:diagnoses2_12,
+         diagnoses1_total, diagnoses2_total, diagnoses1_score, diagnoses2_score) |> 
+  unique() |> 
+  filter(BMI <= 29.9 | diagnoses1_score != diagnoses2_score | is.na(diagnoses1_5) | is.na(diagnoses2_5) | !is.na(diagnoses1_1) | !is.na(diagnoses1_7) | !is.na(diagnoses1_10) | !is.na(diagnoses1_11) | !is.na(diagnoses1_12) | !is.na(diagnoses2_1) | !is.na(diagnoses2_7) | !is.na(diagnoses2_10) | !is.na(diagnoses2_11) | !is.na(diagnoses2_12) | diagnoses1_total >= 5 | diagnoses2_total >= 5) |> 
+  nrow()
+  
+#calculate total number of eligible participants
+n_eligible <- n_screened - (n_ip_block_excluded + n_ip_country_excluded + n_duplicates + n_bmi_diag_excluded)
+
+#count number of completed responses
+n_completed <- data |> 
+  nrow()
+
+#those who were eligible but did not complete withdrew from the survey at some point
+n_voluntary_withdrawal_pre_r <- n_eligible - n_randomized
+
+#what percent of participants who screened were eligible to complete the study?
+percent_eligible <- (n_eligible / n_screened) * 100
+
+
+
+```
+
+Create flow diagram
+
+```{r}
+#| label: flow_diagram_plot
+
+#create plot foundation
+consort <- tibble(x = 1:100, y = 1:100) |> 
+  ggplot(aes(x, y)) +
+  scale_x_continuous(minor_breaks = seq(10, 100, 10)) +
+  scale_y_continuous(minor_breaks = seq(10, 100, 10)) +
+  theme_linedraw()
+
+#add n_screened box and text
+consort <- consort +
+  geom_rect(xmin = 34, xmax = 66, ymin = 94, ymax = 100, color='black',
+            fill = 'white', linewidth = 0.25, linewidth = 0.25) +
+  annotate('text', x = 50, y = 97, label = str_glue("Participants screened = {n_screened}"),
+           size = 5)
+
+#add n_eligible and n_excluded boxes
+consort <- consort +
+   geom_rect(xmin = 43, xmax=57, ymin=75, ymax=81, color='black',
+            fill='white', linewidth = 0.25) +
+  annotate('text', x= 50, y=78,label= str_glue("Eligible = {n_eligible}"), size = 5) +
+  geom_rect(xmin = 71, xmax=95, ymin=78, ymax=99, color='black',
+            fill='white', linewidth = 0.25) +
+  annotate('text', x= 83, y=89,label= str_glue("Ineligible = {n_excluded} \n {n_ip_block_excluded} Using VPN \n {n_ip_country_excluded} Outside of US \n {n_duplicates} Duplicate screens \n {n_bmi_diag_excluded} BMI or diagnoses"), size = 5)
+
+#add arrows between the top three boxes
+consort <- consort +
+  geom_segment(
+    x=50, xend=50, y=94, yend=81.5, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+    geom_segment(
+    x=50, xend=70.5, y=89, yend=89, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#add n_randomized and n_nol_withdrawal_prerandomization boxes
+consort <- consort +
+  geom_rect(xmin = 40, xmax=60, ymin=56, ymax=62, color='black',
+            fill='white', linewidth = 0.25) +
+  annotate('text', x= 50, y=59,label= str_glue("Randomized = {n_randomized}"), size = 5) +
+  geom_rect(xmin = 66, xmax=100, ymin=64, ymax=70, color='black',
+            fill='white', linewidth = 0.25) +
+  annotate('text', x= 83.5, y=67,label= str_glue("{n_voluntary_withdrawal_pre_r} Vol. With. pre-randomization"), size = 5)
+
+#add arrows to the randomized and vol with prerandomization boxes
+consort <- consort +
+  geom_segment(
+    x=50, xend=50, y=75, yend=62.5, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+    geom_segment(
+    x=50, xend=65.5, y=67, yend=67, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#add three arrows for each group, and horizontal line to connect arrows
+consort <- consort +
+  geom_segment(
+  #middle arrow first
+    x=50, xend=50, y=56, yend=41, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  # then leftmost arrow, x and xend=10
+  geom_segment(
+    x=10, xend=10, y=46, yend=41, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  # then rightmost arrow, x and xend=90
+  geom_segment(
+    x=90, xend=90, y=46, yend=41, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  # then horizontal line, but remove the arrow
+  geom_segment(
+    x=10, xend=90, y=46, yend=46, 
+    size=0.15, linejoin = "mitre", lineend = "butt")
+
+#add the HIT, EFT, and NCC boxes
+
+consort <- consort +
+  #first box on left, HIT
+  geom_rect(xmin = 1, xmax=19, ymin=35, ymax=41, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 10, y=38, size = 5,
+             label=str_glue("{hit_all} HIT")) +
+  #2nd box on left, EFT
+  geom_rect(xmin = 41, xmax=59, ymin=35, ymax=41, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 50, y=38, size = 5,
+             label= str_glue("{eft_all} EFT")) +
+#3rd box on left, NCC
+  geom_rect(xmin = 81, xmax=99, ymin=35, ymax=41, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 90, y=38, size = 5,
+             label= str_glue("{ncc_all} NCC"))
+
+#add the three offset arrows below the randomization boxes
+consort <- consort + 
+  #first arrow on left
+  geom_segment(
+    x=2, xend=2, y=35, yend=14.3, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  #2nd arrow on left
+  geom_segment(
+    x=42, xend=42, y=35, yend=14.3, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+#3rd arrow on left
+  geom_segment(
+    x=82, xend=82, y=35, yend=14.3, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#add the voluntary withdrawal after randomization boxes
+consort <- consort +
+  #first box on left, HIT
+  geom_rect(xmin = 5, xmax=19, ymin=22, ymax=28, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 12, y=25, size = 5,
+      label= str_glue("{hit_all - hit_fin} Vol. With.")) +
+    #2nd box from left, EFT
+  geom_rect(xmin = 45, xmax=59, ymin=22, ymax=28, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 52, y=25, size = 5,
+      label= str_glue("{eft_all - eft_fin} Vol. With.")) +
+  #3rd box from left, NCC
+  geom_rect(xmin = 85, xmax=99, ymin=22, ymax=28, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 92, y=25, size = 5,
+      label=  str_glue("{ncc_all - ncc_fin} Vol. With."))
+
+#short arrows to connect voluntary withdrawal after randomization
+consort <- consort +
+  #first arrow on left
+  geom_segment(
+    x=2, xend=4.7, y=25, yend=25, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  #2nd arrow on left
+  geom_segment(
+    x=42, xend=44.7, y=25, yend=25,  
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+#3rd arrow on left
+  geom_segment(
+    x=82, xend=84.7, y=25, yend=25, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#completed after randomization boxes
+consort <- consort +
+   #first box on left
+  geom_rect(xmin = 1, xmax=19, ymin=8, ymax=14, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 10, y=11, size = 5,
+             label= str_glue("{hit_fin} Completed")) +
+  #2ndbox on left
+  geom_rect(xmin = 41, xmax=59, ymin=8, ymax=14, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 50, y=11, size = 5,
+             label= str_glue("{eft_fin} Completed")) +
+#3rd box on left
+  geom_rect(xmin = 81, xmax=99, ymin=8, ymax=14,  
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 90, y=11, size = 5,
+             label= str_glue("{ncc_fin} Completed"))
+
+#remove background lines and axes
+consort <- consort + 
+  theme_void()
+
+# ggsave("plots/flow_diagram.png", dpi = 1000, device = png, width = 10, height = 10)
+# 
+# ggsave("plots/flow_diagram.pdf", dpi = 1000, device = pdf, width = 10, height = 10)
+
+
+```
+
