@@ -109,28 +109,28 @@ rawdata <- rawdata %>%
 
 #pull only the finishers for our study
 data <- rawdata %>% 
-  filter(mTurkCode != 'NA' & Status == "IP Address" & group != 'NA' & IPAddress != 'NA' &
-           StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') %>% 
+  filter(mTurkCode != 'NA' & Status == "IP Address" & group != 'NA' &
+           StartDate > '2022-02-10 11:10:00') %>%
   mutate(mTurkCode = as.factor(mTurkCode), id = row_number(),
          id = as.factor(id), group = as.factor(group)) %>% 
-  select(id, Progress, IPAddress, mTurk_ID, mTurkCode, diagnoses1_score, diagnoses2_score, BMI, 
+  select(id, Progress, mTurkCode, diagnoses1_score, diagnoses2_score, BMI, 
          age = Q3988, edu = Q3982, gender = Q3987, income = Q3984, cont_ladder, hba1c = Q206,
          group:ncc_ac) %>% 
   mutate(age = as.numeric(age)) %>%
-  rename(eft_cue1month = eft_cue1month...822,
-         eft_cue3month = eft_cue3month...823,
-         eft_cue6month = eft_cue6month...824,
-         eft_cue1year = eft_cue1year...825,
-         eft_cue3year = eft_cue3year...826,
-         eft_cue5year = eft_cue5year...827,
-         eft_cue10year = eft_cue10year...828,
-         hit_cue1 = hit_cue1...829,
-         hit_cue2 = hit_cue2...830,
-         hit_cue3 = hit_cue3...831,
-         hit_cue4 = hit_cue4...832,
-         hit_cue5 = hit_cue5...833,
-         hit_cue6 = hit_cue6...834,
-         hit_cue7 = hit_cue7...835)
+  rename(eft_cue1month = eft_cue1month...813,
+         eft_cue3month = eft_cue3month...814,
+         eft_cue6month = eft_cue6month...815,
+         eft_cue1year = eft_cue1year...816,
+         eft_cue3year = eft_cue3year...817,
+         eft_cue5year = eft_cue5year...818,
+         eft_cue10year = eft_cue10year...819,
+         hit_cue1 = hit_cue1...820,
+         hit_cue2 = hit_cue2...821,
+         hit_cue3 = hit_cue3...822,
+         hit_cue4 = hit_cue4...823,
+         hit_cue5 = hit_cue5...824,
+         hit_cue6 = hit_cue6...825,
+         hit_cue7 = hit_cue7...826)
 
 #recode income as an ordered factor
 
@@ -375,6 +375,9 @@ tableone <- data %>%
   bold_labels() |>  
   modify_header(label = "**Variable**") %>% 
   modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Group**")
+
+#view table one
+tableone
 
 #save table
 # tableone |>  
@@ -728,7 +731,7 @@ Fisher's Exact test of randomized vs. finished participants
 #count number of participants randomized to EFT condition
 #we must remove the pilots/previews before counting on the randomization variable
 eft_all <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   select(FL_12_DO_FL_32) |> 
   replace_na(replace = list(FL_12_DO_FL_32 = 0)) |> 
   sum()
@@ -743,7 +746,7 @@ eft_vw <- eft_all - eft_fin
 
 #count number of participants randomized to HIT condition
 hit_all <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   select(FL_12_DO_FL_33) |> 
   replace_na(replace = list(FL_12_DO_FL_33 = 0)) |> 
   sum()
@@ -758,7 +761,7 @@ hit_vw <- hit_all - hit_fin
 
 #count number of participants randomized to NCC condition
 ncc_all <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   select(FL_12_DO_FL_44) |> 
   replace_na(replace = list(FL_12_DO_FL_44 = 0)) |> 
   sum()
@@ -788,7 +791,7 @@ Flow diagram numbers
 #Screened for eligibility. Date field to not include pilot participants,
 # mturk_id field to not include testing, status to prevent survey previews.
 n_screened <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   nrow()
 
 #excluded for any reason; total excluded
@@ -798,9 +801,9 @@ n_screened <- rawdata |>
 #get around to selecting yes and starting the study
 
 n_excluded <- (rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   nrow()) - (rawdata |>  
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test' &
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' &
            IP_country == "United States" & IP_block != 1) |> 
     filter(BMI >= 30 & diagnoses1_score == diagnoses2_score & !is.na(diagnoses1_5) & !is.na(diagnoses2_5) & is.na(diagnoses1_1) & is.na(diagnoses1_7) & is.na(diagnoses1_10) & is.na(diagnoses1_11) & is.na(diagnoses1_12) & is.na(diagnoses2_1) & is.na(diagnoses2_7) & is.na(diagnoses2_10) & is.na(diagnoses2_11) & is.na(diagnoses2_12) & diagnoses1_total <= 4 & diagnoses2_total <= 4) |> 
   nrow())
@@ -808,20 +811,20 @@ n_excluded <- (rawdata |>
 
 #attempted to screen, but was found using an IP address associated with a VPN/VPS 
 n_ip_block_excluded <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   filter(IP_block == 1) |> 
   nrow()
 
 #create vectors of qualtrics response IDs to use for filtering in later calculations
 ip_block_ids <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   filter(IP_block == 1) |> 
   pull(ResponseId)
 
 # attempted to screen, but ip from a country other than the US AND country is not empty (i.e., NA)
 # filter out all responses that have already been excluded 
 n_ip_country_excluded <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |>
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |>
   filter(!ResponseId %in% ip_block_ids) |> 
   filter(IP_country != "United States" & !is.na(IP_country)) |> 
   nrow()
@@ -829,31 +832,44 @@ n_ip_country_excluded <- rawdata |>
 #create vector of response ids associated with bad countries
 #must continue to filter our all responses that have already been excluded
 ip_country_ids <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |>
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |>
   filter(!ResponseId %in% ip_block_ids) |> 
   filter(IP_country != "United States" & !is.na(IP_country)) |> 
   pull(ResponseId)
          
          
+### the following code to count the number of duplicate IP addresses will not run,
+# because IP addresses have been removed from the public data set to protect participant privacy.
+# The number of duplicate IP addresses screened out from the survey is 1736.
+
 #number of duplicate IP addresses, preventing folks from continuing past the authentication block
 #we must remove pilots/previews, and keep those who passed the IP address screens via IPHub
-n_duplicates <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
-  filter(!ResponseId %in% ip_block_ids) |> 
-  filter(!ResponseId %in% ip_country_ids) |> 
-  select(Access) |>
-  duplicated() |> 
-  sum()
+# n_duplicates <- rawdata |> 
+#   filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
+#   filter(!ResponseId %in% ip_block_ids) |> 
+#   filter(!ResponseId %in% ip_country_ids) |> 
+#   select(Access) |>
+#   duplicated() |> 
+#   sum()
+
+n_duplicates <- 1736
+
+### the following code also cannot run, as 'Access' contained IP addresses,
+# and has been removed from the deidentified raw data file. Instead, I have included a file
+# in the data folder called "distinct_ips", which contains the qualtrics IDs of all
+# non-duplicated IP addresses. 
 
 #create vector of distinct IP addresses to keep in later calculations
-distinct_ips <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
-  filter(!ResponseId %in% ip_block_ids) |> 
-  filter(!ResponseId %in% ip_country_ids) |>
-  select(ResponseId, Access) |> 
-  distinct(Access, .keep_all = TRUE) |> 
-  pull(ResponseId)
+# distinct_ips <- rawdata |> 
+#   filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
+#   filter(!ResponseId %in% ip_block_ids) |> 
+#   filter(!ResponseId %in% ip_country_ids) |>
+#   select(ResponseId, Access) |> 
+#   distinct(Access, .keep_all = TRUE) |> 
+#   pull(ResponseId)
 
+distinct_ips <- read_csv("data/distinct_ips.csv") |> 
+  pull(distinct_ips)
 
 # screened, excluding all previously dropped participants, but excluded for BMI, is not reporting type 2 diabetes in both questions,
 # is not reporting the same diseases in both questions, is reporting colorectal cancer,
@@ -866,13 +882,12 @@ distinct_ips <- rawdata |>
 #!is.na = they selected this. is.na = they did not select this. 
 
 n_bmi_diag_excluded <- rawdata |> 
-  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00' & mTurk_ID != 'test') |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
   filter(!ResponseId %in% ip_block_ids) |> 
   filter(!ResponseId %in% ip_country_ids) |> 
   filter(ResponseId %in% distinct_ips) |> 
-  select(Access, BMI, diagnoses1_10:diagnoses1_12, diagnoses2_10:diagnoses2_12,
+  select(BMI, diagnoses1_10:diagnoses1_12, diagnoses2_10:diagnoses2_12,
          diagnoses1_total, diagnoses2_total, diagnoses1_score, diagnoses2_score) |> 
-  unique() |> 
   filter(BMI <= 29.9 | diagnoses1_score != diagnoses2_score | is.na(diagnoses1_5) | is.na(diagnoses2_5) | !is.na(diagnoses1_1) | !is.na(diagnoses1_7) | !is.na(diagnoses1_10) | !is.na(diagnoses1_11) | !is.na(diagnoses1_12) | !is.na(diagnoses2_1) | !is.na(diagnoses2_7) | !is.na(diagnoses2_10) | !is.na(diagnoses2_11) | !is.na(diagnoses2_12) | diagnoses1_total >= 5 | diagnoses2_total >= 5) |> 
   nrow()
   
@@ -1069,10 +1084,9 @@ consort <- consort +
 consort <- consort + 
   theme_void()
 
-# ggsave("plots/flow_diagram.png", dpi = 1000, device = png, width = 10, height = 10)
+# ggsave("flow_diagram.png", dpi = 1000, device = png, width = 10, height = 10)
 # 
 # ggsave("plots/flow_diagram.pdf", dpi = 1000, device = pdf, width = 10, height = 10)
 
 
 ```
-
