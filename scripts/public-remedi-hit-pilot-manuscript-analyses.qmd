@@ -113,11 +113,27 @@ data <- rawdata %>%
            StartDate > '2022-02-10 11:10:00') %>%
   mutate(mTurkCode = as.factor(mTurkCode), id = row_number(),
          id = as.factor(id), group = as.factor(group)) %>% 
-  select(id, Progress, mTurkCode, diagnoses1_score, diagnoses2_score, BMI, 
-         age = Q3988, edu = Q3982, gender = Q3987, income = Q3984, cont_ladder, hba1c = Q206,
-         group:ncc_ac) %>% 
-  mutate(age = as.numeric(age)) 
-  
+  select(ResponseId, id, Progress, mTurkCode, diagnoses1_score,
+         diagnoses2_score, BMI, age = Q3988, edu = Q3982, gender = Q3987,
+         income = Q3984, cont_ladder, hba1c = Q206,
+        `1_eft_ac`, `2_eft_ac`, `3_eft_ac`, `4_eft_ac`, `5_eft_ac`,
+         `6_eft_ac`, `7_eft_ac`, group:ncc_ac) %>% 
+  mutate(age = as.numeric(age)) |> 
+  mutate(eft_ac_1 
+         = case_when(
+    `1_eft_ac` == "$1000 now" ~ .25,
+    `1_eft_ac` == "$500 now" ~ 0),
+    eft_ac_3 = case_when(
+    `3_eft_ac` == "$1000 now" ~ .25,
+    `3_eft_ac` == "$500 now" ~ 0),
+    eft_ac_5 = case_when(
+    `5_eft_ac` == "$1000 now" ~ .25,
+    `5_eft_ac` == "$500 now" ~ 0),
+    eft_ac_7 = case_when(
+    `7_eft_ac` == "$1000 now" ~ .25,
+    `7_eft_ac` == "$500 now" ~ 0),
+    eft_ac_correct = eft_ac_1 + eft_ac_3 + eft_ac_5 + eft_ac_7)
+
 #recode income as an ordered factor
 
 data$income <- factor(data$income, levels = c("$0 to $9,999",
@@ -172,7 +188,6 @@ data$hba1c <- data |>
   )) |> 
   pull(hba1c)
 
-
 data <- 
   set_label(data,
             age = "Age",
@@ -191,7 +206,7 @@ Calculate Ordinal AUC, ANOVAs and posthoc tests for differences in AUC between g
 #create wide dataframe with indiff points
 wide_dd <- rbind(data %>%
                    filter(group == "EFT") %>%
-                   select(id, group, mTurkCode, ac = eft_ac,
+                   select(id, group, mTurkCode, ac = eft_ac_correct,
                           eft_ip_30_1000:eft_ip_3650_1000) %>% 
                    rename("30" = eft_ip_30_1000, "90" = eft_ip_90_1000, "180" = eft_ip_180_1000,
                           "365" = eft_ip_365_1000, "1095" = eft_ip_1095_1000, "1825" = eft_ip_1825_1000,
@@ -206,7 +221,8 @@ wide_dd <- rbind(data %>%
                    rename("30" = ncc_ip_30_1000, "90" = ncc_ip_90_1000, "180" = ncc_ip_180_1000,
                           "365" = ncc_ip_365_1000, "1095" = ncc_ip_1095_1000, "1825" = ncc_ip_1825_1000,
                           "3650" = ncc_ip_3650_1000)) %>% 
-  mutate(ac = as.numeric(ac))
+  mutate(ac = as.numeric(ac),
+        group = fct_relevel(group, "EFT", "HIT", "NCC"))
 
 #create long df of IPs
 long_dd <- wide_dd %>% 
@@ -265,8 +281,8 @@ auc_ord_pass_ac %>%
 
 pass_auc_model <- aov(AUC ~ group, auc_ord_pass_ac)
 summary(pass_auc_model)
-check_model(pass_auc_model)
-report(pass_auc_model)
+# check_model(pass_auc_model)
+# report(pass_auc_model)
 
 tukey_pass <- TukeyHSD((pass_auc_model))
 
@@ -304,8 +320,8 @@ effectsize::cohens_d(
 # repeat ANOVA, posthoc, and posthoc effect size calculations for all finishers
 all_auc_model <- aov(AUC ~ group, auc_ord_all)
 summary(all_auc_model)
-check_model(all_auc_model)
-report(all_auc_model)
+# check_model(all_auc_model)
+# report(all_auc_model)
 
 tukey_all <- TukeyHSD(all_auc_model, conf.level = .95)
 
@@ -338,6 +354,230 @@ effectsize::cohens_d(
     filter(group == "HIT") |> 
     pull(AUC))
 
+#test for differences in DD AC scores between groups
+#examine group means/medians/sds/var
+#our variance in AC is less than the mean, suggesting low chance of
+#over-dispersion in the model
+
+wide_dd |> 
+  group_by(group) |> 
+  summarise(mean_ac = mean(ac),
+            median_ac = median(ac),
+            sd_ac = sd(ac),
+            var_ac = var(ac),
+            n_ac = n())
+
+#examine distribution of AC scores by group
+wide_dd |> 
+  mutate(ac = as.factor(ac)) |>
+  ggplot(aes(x = ac)) +
+  geom_bar() +
+  facet_wrap(~group)
+
+#examine count data of AC scores by group
+wide_dd |> 
+  group_by(group, ac) |> 
+  summarise(n_ac = n())
+
+#kruskal-wallace to test for differences in distribution; fail to reject null
+kruskal.test(ac ~ group, data = wide_dd)
+
+#use logstic regression to test for differences in AC passing rates by groups
+logit_model <- wide_dd |> 
+  mutate(ac = case_when(
+    ac >= .75 ~ 1,
+    ac < .75 ~ 0,
+  )) |> 
+  glm(ac ~ group, family = "binomial", data = _)
+
+summary(logit_model)
+confint(logit_model)
+
+#test statistic for comparison of model with predictors vs. null model: chi square
+with(logit_model, null.deviance - deviance)
+
+#degrees of freedom for the difference between full model and null model
+with(logit_model, df.null - df.residual)
+
+#p-value testing difference between model with predictors vs. model with just intercept (null model)
+with(logit_model, pchisq(null.deviance - deviance, df.null - df.residual, lower.tail = FALSE))
+
+#no significant effect of group on log-odds of AC score passing
+
+```
+
+Examine distribution of EFT and HIT cue ratings during generation task
+
+```{r}
+#| label: cue_gen_ratings
+
+#EFT and HIT cue gen ratings; pull data, join/shape
+#EFT ratings
+eft_ratings <- rawdata |> 
+  filter(mTurkCode != 'NA' & Status == "IP Address" & group != 'NA' &
+           StartDate > '2022-02-10 11:10:00') |> 
+  mutate(mTurkCode = as.factor(mTurkCode), id = row_number(),
+         id = as.factor(id), group = as.factor(group)) |> 
+  select(id, group, Q3904_1:Q3904_4, Q3909_1:Q3909_4, Q3914_1:Q3914_4,
+         Q3919_1:Q3919_4, Q3924_1:Q3924_4, Q3929_1:Q3929_4,
+         Q3934_1:Q3934_4) 
+
+# must now rename the 28 columns to reflect the characteristic being rated,
+# and the cue being rated
+
+# Create a vector of group suffixes
+group_suffixes <- seq(1:7) %>% as.character()
+
+# Define a function to generate the new column names
+generate_eft_rating_names <- function(suffix) {
+  c("liking", "important", "exciting", "vivid") %>%
+    paste0("_", suffix) %>%
+    set_names(c("liking", "important", "exciting", "vivid"))
+}
+
+# Map the function to generate new column names for each rating per cue
+eft_rating_names <- map(group_suffixes, generate_eft_rating_names)
+
+# Flatten the list of new column names into a single vector
+eft_rating_names <- flatten_chr(eft_rating_names) |> as.vector()
+
+# Rename the columns
+eft_ratings <- eft_ratings %>%
+  rename_with(~ eft_rating_names, -c(1:2))
+
+#pivot longer, recode rating colum
+eft_ratings <- eft_ratings |> 
+  pivot_longer(-id:-group,
+               names_to = c("characteristic", "cue_num"),
+               names_sep = "_",
+               values_to = "rating") |> 
+  mutate(rating = 
+           case_when(
+             rating == "5 - Very Much" ~ 5,
+             rating == 4 ~ 4,
+             rating == 3 ~ 3,
+             rating == 2 ~ 2,
+             rating == "1 - Not at All" ~ 1
+           )) |> 
+  drop_na() 
+
+## HIT ratings
+hit_ratings <- rawdata |> 
+  filter(mTurkCode != 'NA' & Status == "IP Address" & group != 'NA' &
+           StartDate > '2022-02-10 11:10:00') |> 
+  mutate(mTurkCode = as.factor(mTurkCode), id = row_number(),
+         id = as.factor(id), group = as.factor(group)) |> 
+  select(id, group, starts_with("hit_desc")) 
+
+# must now rename the 28 columns to reflect the characteristic being rated,
+# and the cue being rated
+
+# Create a vector of group suffixes
+group_suffixes <- seq(1:7) %>% as.character()
+
+# Define a function to generate the new column names
+generate_hit_rating_names <- function(suffix) {
+  c("liking", "important", "exciting", "useful") %>%
+    paste0("_", suffix) %>%
+    set_names(c("liking", "important", "exciting", "useful"))
+}
+
+# Map the function to generate new column names for each rating per cue
+hit_rating_names <- map(group_suffixes, generate_hit_rating_names)
+
+# Flatten the list of new column names into a single vector
+hit_rating_names <- flatten_chr(hit_rating_names) |> as.vector()
+
+# Rename the columns
+hit_ratings <- hit_ratings %>%
+  rename_with(~ hit_rating_names, -c(1:2))
+
+#pivot longer, recode rating colum
+hit_ratings <- hit_ratings |> 
+  mutate(across(.cols = 3:ncol(hit_ratings), .fns = as.character)) |> 
+  pivot_longer(-id:-group,
+               names_to = c("characteristic", "cue_num"),
+               names_sep = "_",
+               values_to = "rating") |> 
+  mutate(rating = 
+           case_when(
+             rating == "5 - Very Much" ~ 5,
+             rating == 4 ~ 4,
+             rating == 3 ~ 3,
+             rating == 2 ~ 2,
+             rating == "1 - Not at All" ~ 1
+           )) |> 
+  drop_na() 
+
+#bind eft and hit ratings together
+cmbd_ratings <- bind_rows(eft_ratings, hit_ratings) 
+
+#summary df of ratings by group and characteristic
+rating_summary <- Rmisc::summarySE(
+  data = cmbd_ratings, 
+  measurevar = "rating",
+  groupvar = c("group", "characteristic")
+)
+
+#create figure of of cue ratings by group and characteristic
+rating_summary |> 
+  mutate(group = 
+           case_when(
+             group == "EFT" ~ "EFT",
+             group == "HHT" ~ "HIT"
+           )) |> 
+  rename(Rating = rating, Group = group, Characteristic = characteristic) |> 
+  ggplot(aes(x = Characteristic, y = Rating, group = Group, color = Group,
+             fill = Group)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = Rating - se, ymax = Rating + se),
+                position = "dodge", color = "black") +
+  ylim(0, 5) +
+  beezdemand::theme_apa() +
+  scale_fill_manual(values = c("EFT" = "#374E55FF",
+                               "HIT" = "#DF8F44FF")) +
+  scale_color_manual(values = c("EFT" = "#374E55FF",
+                                "HIT" = "#DF8F44FF")) +
+  labs(title = "Mean characteristic ratings for EFT and HIT Cues")
+
+# ggsave("../remedi-hit-pilot/plots/supplemental-eft-hit-cue-ratings.png",
+#        plot = last_plot(),
+#        device = "png",
+#        dpi = 1000,
+#        height = 5,
+#        width = 8)
+
+#examine group and characteristic summary stats
+cmbd_ratings |> 
+  group_by(group, characteristic) |> 
+  summarize(mean_rating = mean(rating),
+            sd_rating = sd(rating),
+            n_rating = n())
+
+#fixed effects only comparisons
+cmbd_ratings |> 
+  filter(characteristic == "important") |> 
+  group_by(id) |> 
+  mutate(mean_rating = mean(rating)) |> 
+  distinct(id, group, mean_rating) |> 
+  t.test(mean_rating ~ group, data = _) 
+
+#mixed effect model; random intercept for each participant
+#problematic given the distribution of rating (not exactly continuous)
+gmem <- cmbd_ratings |> 
+  filter(characteristic == "liking") |> 
+  lme4::lmer(rating ~ group + (1 | id), data = _)
+
+summary(gmem)
+performance::icc(gmem)
+
+cmbd_ratings |> 
+  group_by(id, characteristic) |> 
+  summarize(mean_rating = mean(rating)) |> 
+  pivot_wider(id_cols = id, 
+              names_from = characteristic,
+              values_from = mean_rating)
+ 
 ```
 
 Demographics Table (Table 1)
@@ -370,6 +610,142 @@ tableone
 #   as_gt() |> 
 #   gt::gtsave(filename = "plots/tableone.pdf")
 
+```
+
+Demographic Table for randomized completers vs. randomized noncompleters
+
+```{r}
+#| label: rand_completers_vs_noncompleters
+
+#examine demographic differences between completers and non-completers 
+#first, we must create a new df containing only participants who were randomized
+#first, create three vectors of response ids that were randomized
+
+eft_repids <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
+  select(ResponseId, FL_12_DO_FL_32) |> 
+  replace_na(replace = list(FL_12_DO_FL_32 = 0)) |> 
+  filter(FL_12_DO_FL_32 == 1) |> 
+  pull(ResponseId)
+
+hit_repids <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
+  select(ResponseId, FL_12_DO_FL_33) |> 
+  replace_na(replace = list(FL_12_DO_FL_33 = 0)) |> 
+  filter(FL_12_DO_FL_33 == 1) |> 
+  pull(ResponseId)
+
+ncc_repids <- rawdata |> 
+  filter(Status == "IP Address" & StartDate > '2022-02-10 11:10:00') |> 
+  select(ResponseId, FL_12_DO_FL_44) |> 
+  replace_na(replace = list(FL_12_DO_FL_44 = 0)) |> 
+  filter(FL_12_DO_FL_44 == 1) |> 
+  pull(ResponseId)
+
+#create df of participants who have been randomized, but may not have completed
+ran_data <- rawdata |> 
+  filter(ResponseId %in% eft_repids | ResponseId %in% hit_repids | ResponseId
+         %in% ncc_repids) |> 
+  mutate(completed = as_factor( 
+    case_when(
+      Progress == 100 ~ "Completed",
+      Progress < 100 ~ "Voluntarily Withdrawn"
+  )),
+        group2 = case_when(
+          FL_12_DO_FL_32 == 1 ~ "EFT",
+          FL_12_DO_FL_33 == 1 ~ "HIT",
+          FL_12_DO_FL_44 == 1 ~ "NCC"
+        )) |> 
+  rename(age = Q3988, edu = Q3982, gender = Q3987,
+         income = Q3984, hba1c = Q206)
+
+#recode income as an ordered factor
+
+ran_data$income <- factor(ran_data$income, levels = c("$0 to $9,999",
+                                              "$10,000 to $19,999",
+                                              "$20,000 to $29,999",
+                                              "$30,000 to $39,999",
+                                              "$40,000 to $49,999",
+                                              "$50,000 to $59,999",
+                                              "$60,000 to $69,999",
+                                              "$70,000 to $79,999",
+                                              "$80,000 to $89,999",
+                                              "$90,000 to $99,999",
+                                              "$100,000 to $109,999",
+                                              "$130,000 to $139,999",
+                                              "$170,000 to $179,999",
+                                              "$180,000 to $189,999"))
+
+#recode income as a continuous variable in include in table 
+ran_data$income <- ran_data |> 
+  mutate(income = as.numeric(income),
+         income = case_when(
+           income == 1 ~ 4999.5,
+           income == 2 ~ 1499.5,
+           income == 3 ~ 24999.5,
+           income == 4 ~ 34999.5, 
+           income == 5 ~ 49999.5, 
+           income == 6 ~ 54999.5,
+           income == 7 ~ 64999.5,
+           income == 8 ~ 74999.5,
+           income == 9 ~ 84999.5,
+           income == 10 ~ 94999.5,
+           income == 11 ~ 104999.5,
+           income == 12 ~ 134999.5,
+           income == 13 ~ 174999.5, 
+           income == 14 ~ 184999.5
+         )) |> 
+  pull(income)
+
+ran_data$group <- recode_factor(ran_data$group, "HHT" = "HIT")
+
+#recode hba1c values to decrease number of categories for table 
+ran_data$hba1c <- ran_data |> 
+  mutate(hba1c = case_when(
+    hba1c == "6.4% or lower" ~ "6.9% or lower",
+    hba1c == "6.5% - 6.9%" ~ "6.9% or lower",
+    hba1c == "7.0% - 7.4%" ~ "7.0% - 8.0%",
+    hba1c == "7.5% - 7.9%" ~ "7.0% - 8.0%",
+    hba1c == "8.0% - 8.4%" ~ "8.0% - 8.9%",
+    hba1c == "8.5% - 8.9%" ~ "8.0% - 8.9%",
+    hba1c == "9% or greater" ~ "9.0% or greater",
+    hba1c == "I don't know my most recent HbA1c reading" ~ "Unkown by participant"
+  )) |> 
+  pull(hba1c)
+
+
+ran_data <- 
+  set_label(ran_data,
+            age = "Age",
+            income = "Income",
+            gender = "Gender",
+            cont_ladder = "Contemplation Ladder",
+            edu = "Education",
+            hba1c = "HbA1c",
+            completed = "Completion Status",
+            group2 = "Group")
+
+#create demographic table
+completers_table <- ran_data |> 
+  select(group2, age, BMI, income, completed,
+         cont_ladder, hba1c, gender) %>% 
+  tbl_summary(
+    by = completed,
+    statistic = list(all_continuous() ~ "{median} ({p25}, {p75})",
+                     all_categorical() ~ "{n} / {N} ({p}%)"),
+    digits = all_continuous() ~ 2,
+  ) %>% 
+  add_overall() %>% 
+  add_p(include = c("age", "BMI", "income", "cont_ladder",
+                    "gender", "hba1c", "group2")) |> 
+  bold_labels() |>  
+  modify_header(label = "**Variable**") %>% 
+  modify_spanning_header(c("stat_1", "stat_2",) ~ "**Completion Status**")
+
+#save table
+# completers_table |>
+#   as_gt() |>
+#   gt::gtsave(filename = "../remedi-hit-pilot/plots/completers_table.pdf")
 
 ```
 
@@ -396,8 +772,8 @@ plotdata_sum <- Rmisc::summarySE(data = plotdata, measurevar = "y", groupvars = 
 
 plotdataord_sum <- plotdata_sum %>% 
   as_tibble() %>% 
-  prep_ordinal_all(., x_axis = "x")
-
+  prep_ordinal_all(., x_axis = "x") 
+  
 #create plot using ordinal x axis
 pd_ord <- position_dodge(.1)
 
@@ -435,7 +811,7 @@ indiffplot_ord <- plotdata_ord %>%
 
 #create discounting curves for each group
 #colors to match the main plot
-colors <- bind_cols(pal_jama("default")(3), c("HIT", "EFT", "NCC")) |> 
+colors <- bind_cols(pal_jama("default")(3), c("EFT", "HIT", "NCC")) |> 
   rename(color = ...1,
          group = ...2)
 
@@ -543,12 +919,13 @@ indiffplot_ord_ncc <- plotdata_ord %>%
 
 ggarrange(
   indiffplot_ord,
-  ggarrange(indiffplot_ord_hit, indiffplot_ord_eft, indiffplot_ord_ncc, 
+  ggarrange(indiffplot_ord_eft, indiffplot_ord_hit, indiffplot_ord_ncc, 
             ncol = 3, labels = c("B", "C", "D")),
   nrow = 3, labels = "A"
 )
 
-# ggsave("plots/group-ordinal-discounting-curves-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15)
+# ggsave("../remedi-hit-pilot/plots/group-ordinal-discounting-curves-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15,
+#        plot = last_plot())
 
 ### supplementary materials; recreate plots using all data
 #create plotdata for ordinal delays, all finishers
@@ -561,10 +938,12 @@ plotdata_sum_all <- Rmisc::summarySE(data = plotdata_ord_all, measurevar = "y", 
 
 plotdataord_sum_all <- plotdata_sum_all %>% 
   as_tibble() %>% 
-  prep_ordinal_all(., x_axis = "x")
+  prep_ordinal_all(., x_axis = "x") |> 
+  mutate(group = fct_relevel(group, "EFT", "HIT", "NCC"))
 
 #create discounting curve for all finishers
 indiffplot_ord_all <- plotdata_ord_all %>%
+    mutate(group = fct_relevel(group, "EFT", "HIT", "NCC")) |> 
     ggplot(aes(x = x_ord, y = y,  color = group, group = group)) + 
     geom_point(aes(x = x_ord, y = mn, color = group), size = 2, data = plotdataord_sum_all, position = pd_ord) +
     geom_errorbar(aes(x = x_ord, y = mn, ymin = mn - se, ymax = mn + se, color = group),
@@ -584,7 +963,9 @@ indiffplot_ord_all <- plotdata_ord_all %>%
           legend.title = element_text(face = "bold")) +
     scale_x_continuous(breaks=c(1, 2, 3, 4, 5, 6, 7),
     labels = c("30 days", "90 days", "180 days", "365 days", "1095 days", "1825 days", "3650 days")) + 
-    ggsci::scale_color_jama(name = "Group")
+    ggsci::scale_color_jama(name = "Group") +
+  guides(color = guide_legend(override.aes =
+                                list(order = c("EFT", "HIT", "NCC"))))
 
 #EFT, all finishers
 indiffplot_ord_eft_all <- plotdata_ord_all %>%
@@ -653,11 +1034,14 @@ indiffplot_ord_ncc_all <- plotdata_ord_all %>%
 
 ggarrange(
   indiffplot_ord_all,
-  ggarrange(indiffplot_ord_hit_all, indiffplot_ord_eft_all, indiffplot_ord_ncc_all, 
+  ggarrange(indiffplot_ord_eft_all,
+            indiffplot_ord_hit_all,
+            indiffplot_ord_ncc_all, 
             ncol = 3, labels = c("B", "C", "D")),
   nrow = 3, labels = "A")
 
-# ggsave("plots/supplement-group-ordinal-discounting-curves-all-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15)
+# ggsave("../remedi-hit-pilot/plots/supplement-group-ordinal-discounting-curves-all-panel-plot.png", device = "png", dpi = 1000, width = 13, height = 15,
+#        plot = last_plot())
 
 ```
 
@@ -684,7 +1068,7 @@ auc_ord_pass_ac |>
                          name = "Group")
 
 
-# ggsave("plots/ordinal-auc-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7)
+# ggsave("../remedi-hit-pilot/plots/ordinal-auc-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7, plot = last_plot())
 
 ### supplementary materials boxplot
 
@@ -706,7 +1090,7 @@ auc_ord_all |>
                          name = "Group")
 
 
-# ggsave("plots/supplement-ordinal-auc-all-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7) 
+# ggsave("../remedi-hit-pilot/plots/supplement-ordinal-auc-all-boxplot.png", device = "png", dpi = 1000, width = 10, height = 7, plot = last_plot())
 
 
 ```
@@ -766,7 +1150,11 @@ fisher_df <- tibble(eft = c(eft_vw, eft_fin),
                     hit = c(hit_vw, hit_fin),
                     ncc = c(ncc_vw, ncc_fin))
 
+#fisher test for comparison withdrawal across all groups
 fisher.test(fisher_df)
+
+#pairwise fisher comparisons
+rstatix::pairwise_fisher_test(fisher_df)
 ```
 
 Flow diagram numbers
@@ -915,9 +1303,9 @@ consort <- consort +
 
 #add n_eligible and n_excluded boxes
 consort <- consort +
-   geom_rect(xmin = 43, xmax=57, ymin=75, ymax=81, color='black',
+   geom_rect(xmin = 43, xmax=57, ymin=80, ymax=86, color='black',
             fill='white', linewidth = 0.25) +
-  annotate('text', x= 50, y=78,label= str_glue("Eligible = {n_eligible}"), size = 5) +
+  annotate('text', x= 50, y=83,label= str_glue("Eligible = {n_eligible}"), size = 5) +
   geom_rect(xmin = 71, xmax=95, ymin=78, ymax=99, color='black',
             fill='white', linewidth = 0.25) +
   annotate('text', x= 83, y=89,label= str_glue("Ineligible = {n_excluded} \n {n_ip_block_excluded} Using VPN \n {n_ip_country_excluded} Outside of US \n {n_duplicates} Duplicate screens \n {n_bmi_diag_excluded} BMI or diagnoses"), size = 5)
@@ -925,7 +1313,7 @@ consort <- consort +
 #add arrows between the top three boxes
 consort <- consort +
   geom_segment(
-    x=50, xend=50, y=94, yend=81.5, 
+    x=50, xend=50, y=94, yend=87, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
     geom_segment(
@@ -935,21 +1323,21 @@ consort <- consort +
 
 #add n_randomized and n_nol_withdrawal_prerandomization boxes
 consort <- consort +
-  geom_rect(xmin = 40, xmax=60, ymin=56, ymax=62, color='black',
+  geom_rect(xmin = 40, xmax=60, ymin=63, ymax=69, color='black',
             fill='white', linewidth = 0.25) +
-  annotate('text', x= 50, y=59,label= str_glue("Randomized = {n_randomized}"), size = 5) +
-  geom_rect(xmin = 66, xmax=100, ymin=64, ymax=70, color='black',
+  annotate('text', x= 50, y=66,label= str_glue("Randomized = {n_randomized}"), size = 5) +
+  geom_rect(xmin = 66, xmax=100, ymin=69, ymax=75, color='black',
             fill='white', linewidth = 0.25) +
-  annotate('text', x= 83.5, y=67,label= str_glue("{n_voluntary_withdrawal_pre_r} Vol. With. pre-randomization"), size = 5)
+  annotate('text', x= 83.5, y=72,label= str_glue("{n_voluntary_withdrawal_pre_r} Vol. With. pre-randomization"), size = 5)
 
 #add arrows to the randomized and vol with prerandomization boxes
 consort <- consort +
   geom_segment(
-    x=50, xend=50, y=75, yend=62.5, 
+    x=50, xend=50, y=80, yend=70, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
     geom_segment(
-    x=50, xend=65.5, y=67, yend=67, 
+    x=50, xend=65.5, y=72, yend=72, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed"))
 
@@ -957,122 +1345,204 @@ consort <- consort +
 consort <- consort +
   geom_segment(
   #middle arrow first
-    x=50, xend=50, y=56, yend=41, 
+    x=50, xend=50, y=63, yend=55, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
   # then leftmost arrow, x and xend=10
   geom_segment(
-    x=10, xend=10, y=46, yend=41, 
+    x=10, xend=10, y=60, yend=55, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
   # then rightmost arrow, x and xend=90
   geom_segment(
-    x=90, xend=90, y=46, yend=41, 
+    x=90, xend=90, y=60, yend=55, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
   # then horizontal line, but remove the arrow
   geom_segment(
-    x=10, xend=90, y=46, yend=46, 
+    x=10, xend=90, y=60, yend=60, 
     size=0.15, linejoin = "mitre", lineend = "butt")
 
-#add the HIT, EFT, and NCC boxes
+#add the EFT, HIT, and NCC boxes
 
 consort <- consort +
-  #first box on left, HIT
-  geom_rect(xmin = 1, xmax=19, ymin=35, ymax=41, 
+  #first box on left, EFT
+  geom_rect(xmin = 1, xmax=19, ymin=48, ymax=54, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 10, y=38, size = 5,
-             label=str_glue("{hit_all} HIT")) +
-  #2nd box on left, EFT
-  geom_rect(xmin = 41, xmax=59, ymin=35, ymax=41, 
-              color='black', fill='white', size=0.25) +
-  annotate('text', x= 50, y=38, size = 5,
+  annotate('text', x= 10, y=51, size = 5,
              label= str_glue("{eft_all} EFT")) +
-#3rd box on left, NCC
-  geom_rect(xmin = 81, xmax=99, ymin=35, ymax=41, 
+  
+  #second box on left, HIT
+  geom_rect(xmin = 41, xmax=59, ymin=48, ymax=54, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 90, y=38, size = 5,
+  annotate('text', x= 50, y=51, size = 5,
+             label=str_glue("{hit_all} HIT")) +
+  
+  #3rd box on left, NCC
+  geom_rect(xmin = 81, xmax=99, ymin=48, ymax=54, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 90, y=51, size = 5,
              label= str_glue("{ncc_all} NCC"))
 
 #add the three offset arrows below the randomization boxes
 consort <- consort + 
   #first arrow on left
   geom_segment(
-    x=2, xend=2, y=35, yend=14.3, 
+    x=2, xend=2, y=48, yend=30, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
   #2nd arrow on left
   geom_segment(
-    x=42, xend=42, y=35, yend=14.3, 
+    x=42, xend=42, y=48, yend=30, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
 #3rd arrow on left
   geom_segment(
-    x=82, xend=82, y=35, yend=14.3, 
+    x=82, xend=82, y=48, yend=30, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed"))
 
 #add the voluntary withdrawal after randomization boxes
 consort <- consort +
-  #first box on left, HIT
-  geom_rect(xmin = 5, xmax=19, ymin=22, ymax=28, 
+  #first box from left, EFT
+  geom_rect(xmin = 5, xmax=19, ymin=36, ymax=42, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 12, y=25, size = 5,
-      label= str_glue("{hit_all - hit_fin} Vol. With.")) +
-    #2nd box from left, EFT
-  geom_rect(xmin = 45, xmax=59, ymin=22, ymax=28, 
-              color='black', fill='white', size=0.25) +
-  annotate('text', x= 52, y=25, size = 5,
+  annotate('text', x= 12, y=39, size = 5,
       label= str_glue("{eft_all - eft_fin} Vol. With.")) +
-  #3rd box from left, NCC
-  geom_rect(xmin = 85, xmax=99, ymin=22, ymax=28, 
+  
+  #2nd box on left, HIT
+  geom_rect(xmin = 45, xmax=59, ymin=36, ymax=42, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 92, y=25, size = 5,
+  annotate('text', x= 52, y=39, size = 5,
+      label= str_glue("{hit_all - hit_fin} Vol. With.")) +
+  
+  #3rd box from left, NCC
+  geom_rect(xmin = 85, xmax=99, ymin=36, ymax=42, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 92, y=39, size = 5,
       label=  str_glue("{ncc_all - ncc_fin} Vol. With."))
 
 #short arrows to connect voluntary withdrawal after randomization
 consort <- consort +
   #first arrow on left
   geom_segment(
-    x=2, xend=4.7, y=25, yend=25, 
+    x=2, xend=4.7, y=39, yend=39, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
   #2nd arrow on left
   geom_segment(
-    x=42, xend=44.7, y=25, yend=25,  
+    x=42, xend=44.7, y=39, yend=39,  
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed")) +
 #3rd arrow on left
   geom_segment(
-    x=82, xend=84.7, y=25, yend=25, 
+    x=82, xend=84.7, y=39, yend=39, 
     size=0.15, linejoin = "mitre", lineend = "butt",
     arrow = arrow(length = unit(1, "mm"), type= "closed"))
 
 #completed after randomization boxes
 consort <- consort +
-   #first box on left
-  geom_rect(xmin = 1, xmax=19, ymin=8, ymax=14, 
+  #first box on left
+  geom_rect(xmin = 1, xmax=19, ymin=24, ymax=30, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 10, y=11, size = 5,
-             label= str_glue("{hit_fin} Completed")) +
-  #2ndbox on left
-  geom_rect(xmin = 41, xmax=59, ymin=8, ymax=14, 
-              color='black', fill='white', size=0.25) +
-  annotate('text', x= 50, y=11, size = 5,
+  annotate('text', x= 10, y=27, size = 5,
              label= str_glue("{eft_fin} Completed")) +
-#3rd box on left
-  geom_rect(xmin = 81, xmax=99, ymin=8, ymax=14,  
+  
+  #2nd box on left
+  geom_rect(xmin = 41, xmax=59, ymin=24, ymax=30, 
               color='black', fill='white', size=0.25) +
-  annotate('text', x= 90, y=11, size = 5,
+  annotate('text', x= 50, y=27, size = 5,
+             label= str_glue("{hit_fin} Completed")) +
+  
+  #3rd box on left
+  geom_rect(xmin = 81, xmax=99, ymin=24, ymax=30,  
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 90, y=27, size = 5,
              label= str_glue("{ncc_fin} Completed"))
+
+#add  three more offset arrows below the completed boxes
+consort <- consort + 
+  #first arrow on left
+  geom_segment(
+    x=2, xend=2, y=24, yend=6, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  #2nd arrow on left
+  geom_segment(
+    x=42, xend=42, y=24, yend=6, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  #3rd arrow on left
+  geom_segment(
+    x=82, xend=82, y=24, yend=6, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#add the failed DD AC after completion boxes
+consort <- consort +
+  #first box from left, EFT
+  geom_rect(xmin = 4, xmax=20, ymin=12, ymax=18, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 12, y=15, size = 5,
+      label= str_glue("{eft_fin - n_eft_pass_ac} Failed DD AC")) +
+  
+  #2nd box on left, HIT
+  geom_rect(xmin = 44, xmax=60, ymin=12, ymax=18, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 52, y=15, size = 5,
+      label= str_glue("{hit_fin - n_hit_pass_ac} Failed DD AC")) +
+  
+  #3rd box from left, NCC
+  geom_rect(xmin = 84, xmax=100, ymin=12, ymax=18, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 92, y=15, size = 5,
+      label=  str_glue("{ncc_fin - n_ncc_pass_ac} Failed DD AC"))
+
+# short arrows to connect failed DD AC after completed boxes
+consort <- consort +
+  #first arrow on left
+  geom_segment(
+    x=2, xend=3.7, y=15, yend=15, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  #2nd arrow on left
+  geom_segment(
+    x=42, xend=43.7, y=15, yend=15,  
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+#3rd arrow on left
+  geom_segment(
+    x=82, xend=83.7, y=15, yend=15, 
+    size=0.15, linejoin = "mitre", lineend = "butt",
+    arrow = arrow(length = unit(1, "mm"), type= "closed"))
+
+#passed DD AC and completed, analyzed boxes
+consort <- consort +
+  #first box on left
+  geom_rect(xmin = 1, xmax=19, ymin=3, ymax=9, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 10, y=6, size = 5,
+             label= str_glue("{n_eft_pass_ac} Analyzed")) + 
+  
+  #2nd box on left
+  geom_rect(xmin = 41, xmax=59, ymin=3, ymax=9, 
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 50, y=6, size = 5,
+             label= str_glue("{n_hit_pass_ac} Analyzed")) +
+  
+  #3rd box on left
+  geom_rect(xmin = 81, xmax=99, ymin=3, ymax=9,  
+              color='black', fill='white', size=0.25) +
+  annotate('text', x= 90, y=6, size = 5,
+             label= str_glue("{n_ncc_pass_ac} Analyzed"))
 
 #remove background lines and axes
 consort <- consort + 
   theme_void()
 
-# ggsave("flow_diagram.png", dpi = 1000, device = png, width = 10, height = 10)
+# ggsave("../remedi-hit-pilot/plots/flow_diagram.png", dpi = 1000, device = png, width = 10, height = 10)
 # 
-# ggsave("plots/flow_diagram.pdf", dpi = 1000, device = pdf, width = 10, height = 10)
+# ggsave("../remedi-hit-pilot/plots/flow_diagram.pdf", dpi = 1000, device = pdf, width = 10, height = 10)
 
 
 ```
